@@ -39,7 +39,7 @@ About 7.5 times better performance than currently for large multi-byte primitive
 
 The JWT's may also be causing sporadic Garbage Collection due to continuous allocation/deallocation which is sometimes making the benchmarks up to over twice as slow.
 
-## Extentions to this work...
+## Extensions to this work...
 
 Further work once the primitive ops are implemented and tested is to look at the implementation of the Java arrays to eliminate the use of the Java monad and to make them more compatible with the Haskell/Eta infrastructure.  This will make them easier to use (for a programmer than knows Haskell/ETa), will make their use slightly faster, and will eliminate a problem currently where certain combinations of forcing strictness causes them to be non referentially transparent due to how the Java monad is implemented.
 
