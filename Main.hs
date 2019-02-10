@@ -21,6 +21,8 @@ import Control.Monad.ST (runST)
 import JavaGHC.Prims
 import JavaGHC.Data.Array.Base as NUArr
 
+-- import Debug.Trace
+
 foreign import java unsafe "@static java.lang.System.currentTimeMillis"
   currentTimeMillis :: IO Int64
 
@@ -71,12 +73,12 @@ primesbenchPrims lps = runST$ ST $ \s0# ->
       if x <= 0 then
         let
           !(# !sl'#, !arr# #) = OldPrims.unsafeFreezeArray# cmpsts# sl#
-          go 131072 !c = c
+          go 2048 !c = c
           go i@(I# i#) !c =
-            let !(# v #) = OldPrims.indexArray# arr# (i# `uncheckedIShiftRL#` 6#) in
-            if v .&. (1 `shiftL` (i .&. 63)) /= 0 then go (i + 1) c
-            else go (i + 1) (c + 1)
-        in (# sl'#, go 0 1 #)
+            let !(# v #) = OldPrims.indexArray# arr# i# in
+            let !cnt = fromIntegral $ popCount v :: Int64 in
+            go (i + 1) (c - cnt)
+        in (# sl'#, go 0 131073 #)
       else
         let
           loopi i@(I# i#) si# =
@@ -100,7 +102,7 @@ primesbenchPrims lps = runST$ ST $ \s0# ->
   in loop lps s1#
 
 primesbenchArray :: Int -> Int64
-primesbenchArray lps = findcnt 0 1 where
+primesbenchArray lps = findcnt 0 131073 where
   !composites = runST $ do
     !cmpsts <- unsafeThawSTArray $ DArrs.listArray (0,2047) $ repeat (0 :: Int64)
     let
@@ -127,10 +129,10 @@ primesbenchArray lps = findcnt 0 1 where
         in loopi 0
     loop lps
   findcnt i !c =
-    if i >= 131072 then c else
-    let !v = DArrs.unsafeAt composites (i `shiftR` 6) in
-    if v .&. (1 `shiftL` (i .&. 63)) /= 0 then findcnt (i + 1) c
-    else findcnt (i + 1) (c + 1)
+    if i >= 2048 then c else
+    let !v = DArrs.unsafeAt composites i in
+    let !cnt = fromIntegral $ popCount v :: Int64 in
+    findcnt (i + 1) (c - cnt)
 
 primesbenchJInt64Arr :: Int -> IO Int
 primesbenchJInt64Arr lps = java $ do
@@ -140,12 +142,10 @@ primesbenchJInt64Arr lps = java $ do
       if x <= 0 then
         let
           cntem i !c =
-            if i >= 131072 then return c else do
-              v <- withObject cmpsts $ aget (i `shiftR` 6)
-              if v .&. (1 `shiftL` (i .&. 63)) /= 0
-                then cntem (i + 1) c
-              else cntem (i + 1) (c + 1)
-        in cntem 0 1
+            if i >= 2048 then return c else do
+              v <- withObject cmpsts $ aget i
+              cntem (i + 1) (c - popCount v)
+        in cntem 0 131073
       else
         let
           loopi i =
@@ -165,7 +165,7 @@ primesbenchJInt64Arr lps = java $ do
         in loopi 0
   loop lps
 
-primesbenchByteArrPrims :: Int -> Int64
+primesbenchByteArrPrims :: Int -> Int
 primesbenchByteArrPrims lps = runST$ ST $ \s0# ->
   let
     !(# !s1#, !cmpsts# #) = OldPrims.newPinnedByteArray# 16384# s0#
@@ -173,14 +173,12 @@ primesbenchByteArrPrims lps = runST$ ST $ \s0# ->
       if x <= 0 then
         let
           !(# !sl'#, !arr# #) = OldPrims.unsafeFreezeByteArray# cmpsts# sl#
-          go 131072 !c = c
+          go 16384 !c = c
           go i@(I# i#) !c =
-            let !v# =
-                  OldPrims.indexInt8Array# arr# (i# `uncheckedIShiftRL#` 3#) in
-            case v# `andI#` (1# `uncheckedIShiftL#` (i# `andI#` 7#)) of
-              0# -> go (i + 1) (c + 1)
-              _  -> go (i + 1) c
-        in (# sl'#, go 0 1 #)
+            let !v# = OldPrims.indexInt8Array# arr# i# in
+            let !v = fromIntegral $ I# v# :: Int8 in
+            go (i + 1) (c - popCount v)
+        in (# sl'#, go 0 131073 #)
       else
         let
           loopi i@(I# i#) si# =
@@ -210,8 +208,8 @@ primesbenchByteArrPrims lps = runST$ ST $ \s0# ->
         !sn'# -> init (i + 1) sn'#
   in init 0 s1#
 
-primesbenchUArray :: Int -> Int64
-primesbenchUArray lps = findcnt 0 1 where
+primesbenchUArray :: Int -> Int
+primesbenchUArray lps = findcnt 0 131073 where
   !composites = runST $ do
     !cmpsts <- OUArr.newArray (0,16384) (0 :: Int8) :: ST s (OUArr.STUArray s Int Int8)
     let
@@ -236,10 +234,9 @@ primesbenchUArray lps = findcnt 0 1 where
         in loopi 0
     loop lps
   findcnt i !c =
-    if i >= 131072 then c else
-    let !v = OUArr.unsafeAt composites (i `shiftR` 3) in
-    if v .&. (1 `shiftL` (i .&. 7)) /= 0 then findcnt (i + 1) c
-    else findcnt (i + 1) (c + 1)
+    if i >= 16384 then c else
+    let !v = fromIntegral $ OUArr.unsafeAt composites i :: Int8 in
+    findcnt (i + 1) (c - popCount v)
 
 data ByteBuffer = ByteBuffer @java.nio.ByteBuffer
   deriving Class
@@ -303,20 +300,18 @@ readInt64Buffer bb i = readInt64BB bb (i `shiftL` 3)
 foreign import java unsafe "get"
   readInt64Buffer :: Int64Buffer -> Int -> Int64
 
-primesbenchByteBuffer :: Int -> Int64
+primesbenchByteBuffer :: Int -> Int
 primesbenchByteBuffer lps =
   let
     !cmpsts = newInt64Buffer 2048 0
     loop x =
       if x <= 0 then
         let
-          go 131072 !c = c
+          go 2048 !c = c
           go i !c =
-            let !v = readInt64Buffer cmpsts (i `shiftR` 6) in
-            case v .&. (1 `shiftL` (i .&. 63)) of
-              0 -> go (i + 1) (c + 1)
-              _ -> go (i + 1) c
-        in go 0 1
+            let !v = readInt64Buffer cmpsts i :: Int64 in
+            go (i + 1) (c - popCount v)
+        in go 0 131073
       else
         let
           loopi i =
@@ -341,8 +336,8 @@ primesbenchByteBuffer lps =
         in loopi 0
   in loop lps
 
-primesbenchNUInt8Array :: Int -> Int64
-primesbenchNUInt8Array lps = findcnt 0 1 where
+primesbenchNUInt8Array :: Int -> Int
+primesbenchNUInt8Array lps = findcnt 0 131073 where
   !composites = runST $ do
     !cmpsts <- NUArr.newArray (0,16383) (0 :: Int8) :: ST s (NUArr.STUArray s Int Int8)
     let
@@ -367,13 +362,12 @@ primesbenchNUInt8Array lps = findcnt 0 1 where
         in loopi 0
     loop lps
   findcnt i !c =
-    if i >= 131072 then c else
-    let !v = NUArr.unsafeAt composites (i `shiftR` 3) in
-    if v .&. (1 `shiftL` (i .&. 7)) /= 0 then findcnt (i + 1) c
-    else findcnt (i + 1) (c + 1)
+    if i >= 16384 then c else
+    let !v = NUArr.unsafeAt composites i in
+    findcnt (i + 1) (c - popCount v)
 
-primesbenchNUInt64Array :: Int -> Int64
-primesbenchNUInt64Array lps = findcnt 0 1 where
+primesbenchNUInt64Array :: Int -> Int
+primesbenchNUInt64Array lps = findcnt 0 131073 where
   !composites = runST $ do
     !cmpsts <- NUArr.newArray (0,2047) (0 :: Int64) :: ST s (NUArr.STUArray s Int Int64)
     let
@@ -399,13 +393,12 @@ primesbenchNUInt64Array lps = findcnt 0 1 where
         in loopi 0
     loop lps
   findcnt i !c =
-    if i >= 131072 then c else
-    let !v = NUArr.unsafeAt composites (i `shiftR` 6) in
-    if v .&. (1 `shiftL` (i .&. 63)) /= 0 then findcnt (i + 1) c
-    else findcnt (i + 1) (c + 1)
+    if i >= 2048 then c else
+    let !v = NUArr.unsafeAt composites i in
+    findcnt (i + 1) (c - popCount v)
 
-primesbenchNUFastArray :: Int -> Int64
-primesbenchNUFastArray lps = findcnt 0 1 where
+primesbenchNUFastArray :: Int -> Int
+primesbenchNUFastArray lps = findcnt 0 131073 where
   !composites = runST $ do
     !cmpsts <- NUArr.newArray (0,16383) 0 :: ST s (NUArr.STUArray s Int Int8)
     let
@@ -434,10 +427,38 @@ primesbenchNUFastArray lps = findcnt 0 1 where
         in loopi 0
     loop lps
   findcnt i !c =
-    if i >= 131072 then c else
-    let !v = NUArr.unsafeAt composites (i `shiftR` 3) in
-    if v .&. (1 `shiftL` (i .&. 7)) /= 0 then findcnt (i + 1) c
-    else findcnt (i + 1) (c + 1)
+    if i >= 16384 then c else
+    let !v = NUArr.unsafeAt composites i in
+    findcnt (i + 1) (c - popCount v)
+
+primesbenchNUBoolArray :: Int -> Int64
+primesbenchNUBoolArray lps = findcnt 0 131073 where
+  !composites = runST $ do
+    !cmpsts <- NUArr.newArray (0,131071) False :: ST s (NUArr.STUArray s Int Bool)
+    !cmpwrds <- (NUArr.castSTUArray :: NUArr.STUArray s Int Bool -> ST s (NUArr.STUArray s Int Word)) cmpsts
+    let
+      loop x =
+        if x <= 0 then
+          case NUArr.unsafeFreezeSTUArray cmpwrds of !stcmps -> stcmps else
+        let
+          loopi i =
+            if i > 254 then loop (x - 1) else do
+              !v <- NUArr.unsafeRead cmpsts i
+              if v then loopi (i + 1) else
+                let
+                  !p = i + i + 3
+                  !s0 = (i `shiftL` 1) * (i + 3) + 3
+                  loopc c =
+                    if c >= 131072 then loopi (i + 1) else do
+                      !dmy <- NUArr.unsafeWrite cmpsts c True
+                      dmy `seq` loopc (c + p)
+                in loopc s0
+        in loopi 0
+    loop lps
+  findcnt i !c =
+    if i >= 4096 then c else
+    let !cnt = popCount $ NUArr.unsafeAt composites i in
+    findcnt (i + 1) (c - fromIntegral cnt)
 
 main :: IO ()
 main = do
@@ -516,5 +537,14 @@ main = do
   let cntnufarr = primesbenchNUFastArray 1000
   stopnufarr <- currentTimeMillis
   print cntnufarr
-  putStrLn $ "Current through new Unboxed Array fast algorithm:  " ++ show (stopnufarr - strtnufarr) ++ " milliseconds."
+  putStrLn $ "Through the new Unboxed Array fast algorithm:  " ++ show (stopnufarr - strtnufarr) ++ " milliseconds."
   putStrLn "The above using Eta new Unboxed Array is only about 50% slower than Kotlin or Scala."
+  putStrLn "This shows there is little advantage to sophisticated algorithms when using ByteBuffer backed storage."
+  print $ primesbenchNUBoolArray 100 -- warm up to trigger JIT
+  strtnubarr <- currentTimeMillis
+  let cntnubarr = primesbenchNUBoolArray 1000
+  stopnubarr <- currentTimeMillis
+  print cntnubarr
+  putStrLn $ "Through the new Unboxed Bool Array native bit packing:  " ++ show (stopnubarr - strtnubarr) ++ " milliseconds."
+  putStrLn "The above using Eta new Bool bit-packed Array is somewhat slower than doing it manually."
+  putStrLn "This is due to nested function calls in the implementation of the bit packing."
